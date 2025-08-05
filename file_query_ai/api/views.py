@@ -6,7 +6,8 @@ import requests
 import json
 import time
 
-API_KEY = "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"
+# 🔥 Updated API key
+API_KEY = "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"
 MODEL = "mistralai/mistral-7b-instruct"
 
 @api_view(["POST"])
@@ -53,29 +54,16 @@ def call_openrouter_api(columns, user_prompt, sample_data):
     max_retries = 3
     base_delay = 2
     
-    # Enhanced prompt with data type handling
+    # 🔥 IMPROVED PROMPT - More specific and focused
     full_prompt = f"""
-    CSV columns: {columns[:10]}
-    Sample data: {sample_data}
-    Task: {user_prompt}
+    You have a CSV file with these EXACT columns: {columns}
     
-    IMPORTANT: CSV data is stored as strings. For numeric comparisons, convert to numbers.
+    User query: "{user_prompt}"
     
-    Generate JavaScript code using bracket notation: row['Column Name']
+    Generate ONLY the JavaScript expression that answers this query.
     
-    Examples:
-    - df.head(5)
-    - df.data.filter(row => row['Gender'] === 'male' && parseInt(row['Age']) === 19)
-    - df.data.filter(row => row['Fuel Type'] === 'Gasoline')
-    - df.data.filter(row => parseFloat(row['Price']) > 20000)
-    - df.count()
     
-    For numeric comparisons, use:
-    - parseInt(row['Age']) for integers
-    - parseFloat(row['Price']) for decimals
-    - row['Text Column'] === 'value' for text
-    
-    Return only the JavaScript expression.
+    Your response:
     """
 
     payload = {
@@ -83,19 +71,20 @@ def call_openrouter_api(columns, user_prompt, sample_data):
         "messages": [
             {
                 "role": "system", 
-                "content": """Generate browser-compatible JavaScript for CSV data. 
+                "content": """You are a JavaScript code generator. Generate ONLY executable JavaScript expressions for CSV data operations.
+
+                Rules:
+                1. Return ONLY the JavaScript code, no explanations or comments
+                2. Use bracket notation for columns: row['Column Name']
+                3. For numeric comparisons use parseInt() or parseFloat()
+                4. No sample data, no examples, just the code
                 
-                CRITICAL: CSV values are strings. For numeric comparisons:
-                - Use parseInt(row['Age']) === 19 for integer comparison
-                - Use parseFloat(row['Price']) > 20.5 for decimal comparison
-                - Use row['Name'] === 'text' for string comparison
-                
-                Always use bracket notation for columns."""
+                Response format: Just the code expression"""
             },
             {"role": "user", "content": full_prompt}
         ],
-        "temperature": 0.1,
-        "max_tokens": 150,
+        "temperature": 0.1,  # Very low temperature for consistent output
+        "max_tokens": 50,    # 🔥 Reduced tokens to prevent long explanations
         "timeout": 25
     }
 
@@ -113,43 +102,83 @@ def call_openrouter_api(columns, user_prompt, sample_data):
                 url, 
                 headers=headers, 
                 json=payload,
-                timeout=20  # 20 second timeout
+                timeout=20
             )
             response.raise_for_status()
             content = response.json()['choices'][0]['message']['content']
             
-            # Clean up the response
+            print(f"Raw API response: {content}")  # 🔥 Debug output
+            
+            # 🔥 AGGRESSIVE CLEANING - Extract only the code
             code = content.strip()
             
-            # Remove markdown formatting if present
-            if '```javascript' in code:
-                start = code.find('```javascript') + 13
-                end = code.find('```', start)
-                if end != -1:
-                    code = code[start:end].strip()
-            elif '```' in code:
-                start = code.find('```') + 3
-                end = code.find('```', start)
-                if end != -1:
-                    code = code[start:end].strip()
-            
-            # Remove any Node.js specific code
+            # Remove any explanatory text before the code
             lines = code.split('\n')
-            filtered_lines = []
+            code_line = None
+            
             for line in lines:
-                if not (('require(' in line) or ('const fs' in line) or ('csv-writer' in line)):
-                    filtered_lines.append(line)
+                line = line.strip()
+                # Look for lines that start with df. or data. or contain filter/head/tail/count
+                if (line.startswith('df.') or 
+                    line.startswith('data.') or 
+                    'filter(' in line or 
+                    '.head(' in line or 
+                    '.tail(' in line or 
+                    '.count(' in line or 
+                    '.columns' in line):
+                    code_line = line
+                    break
             
-            code = '\n'.join(filtered_lines).strip()
+            if code_line:
+                code = code_line
             
-            # Post-process: Fix any remaining dot notation issues
+            # Remove markdown formatting
+            if '```' in code:
+                # Extract code from markdown blocks
+                if '```javascript' in code:
+                    start = code.find('```javascript') + 13
+                    end = code.find('```', start)
+                    if end != -1:
+                        code = code[start:end].strip()
+                else:
+                    start = code.find('```') + 3
+                    end = code.find('```', start)
+                    if end != -1:
+                        code = code[start:end].strip()
+            
+            # Remove any remaining explanatory text
+            code = code.split('\n')[0]  # Take only the first line
+            
+            # Remove common prefixes
+            prefixes_to_remove = [
+                "Here's the code:",
+                "The JavaScript expression is:",
+                "Expression:",
+                "Code:",
+                "Answer:",
+                "Result:"
+            ]
+            
+            for prefix in prefixes_to_remove:
+                if code.startswith(prefix):
+                    code = code[len(prefix):].strip()
+            
+            # Clean up any remaining artifacts
+            code = code.replace('`', '').strip()
+            
+            # Remove semicolons at the end
+            code = code.rstrip(';')
+            
+            print(f"Cleaned code: {code}")  # 🔥 Debug output
+            
+            # Post-process: Fix any remaining issues
             code = fix_column_references(code, columns)
             
             return code
             
         except requests.exceptions.Timeout:
             if attempt < max_retries - 1:
-                delay = base_delay * (2 ** attempt)  # Exponential backoff
+                delay = base_delay * (2 ** attempt)
                 print(f"Timeout on attempt {attempt + 1}, retrying in {delay}s...")
                 time.sleep(delay)
                 continue
@@ -157,6 +186,7 @@ def call_openrouter_api(columns, user_prompt, sample_data):
                 return "❌ API Timeout: All retry attempts failed. Please try a simpler query."
                 
         except Exception as e:
+            print(f"API Error on attempt {attempt + 1}: {e}")
             if attempt < max_retries - 1:
                 time.sleep(1)
                 continue
